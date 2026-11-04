@@ -1,0 +1,10 @@
+root = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+end_of_line = crlf
+charset = utf-8
+insert_final_newline = true
+dotnet_sort_system_directives_first = true
+dotnet_diagnostic.CA2000.severity = suggestion

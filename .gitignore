@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+RFGAN.Desktop/Logs/
+**/.RFGAN-v1/
+*.tmp

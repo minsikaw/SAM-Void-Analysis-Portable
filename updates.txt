@@ -1,0 +1,841 @@
+RF GaN / SAM Failure Analysis Tool - Update Timeline
+=====================================================
+
+Version: Priority 0 Traceable Analysis Pipeline v1
+Timestamp: 2026-07-15 01:41:52 CEST (+0200)
+Repository baseline: rfgan_phase2a_cv_flow_adapter
+
+Purpose
+-------
+This version implements the Priority 0 analytical-correctness and traceability work for
+SAM-based void/delamination evaluation. The changes are designed to keep detection,
+quantification, review, persistence and export tied to the same immutable recipe and
+stored analysis result.
+
+Implemented changes
+-------------------
+
+1. Active recipe snapshot passed through detection and analysis
+   - Added AnalysisRecipeSnapshot and AnalysisRecipeResolver.
+   - A runtime snapshot now contains the selected unified preset, advanced CV parameters,
+     learned sample/TSV geometry and disposition thresholds.
+   - Production detection, batch analysis, ROI review and color quantification receive a
+     cloned snapshot instead of silently reading unrelated mutable settings.
+   - Recipe snapshot ID and SHA-256 are attached to detections, ROI corrections and results.
+
+2. Calibration preview separated from publishing
+   - Preview and live-update runs are now in-memory operations only.
+   - Loading a JSON preset opens it for preview without importing or activating it.
+   - "Publish preset" explicitly versions, hashes, saves and activates the configuration.
+   - Published presets embed advanced detector parameters, learned geometry and the
+     whole-sample decision threshold.
+
+3. Non-destructive project rescanning
+   - Project scanning no longer clears ROI corrections or delamination analysis results.
+   - Manually overridden ROIs are retained and are not replaced by scan-time auto detection.
+   - Auto-detection metadata is refreshed only for samples without a manual override.
+   - Existing analysis history remains available when project inputs are rescanned.
+
+4. DelamAnalysisStore made authoritative
+   - The store now keeps every analysis run and exposes the latest run per sample.
+   - Excel export reads persisted results only and performs no image re-analysis.
+   - Annotated composite export uses the persisted result, method and analysis settings.
+   - Export is blocked when mapped analytical input hashes differ from the stored run,
+     requiring re-analysis while preserving the previous history.
+
+5. Sample and TSV polygons preserved and quantified
+   - Sample and TSV polygons are retained by the advanced detector and ROI correction store.
+   - Manual sample corrections preserve/regenerate polygon geometry.
+   - Mask and color-range quantification use polygon masks, with rectangle fallback only for
+     legacy data.
+   - TSV measurements are clipped to the sample polygon.
+   - Review and annotated-output overlays render the stored polygons.
+
+6. Input, recipe, settings and result versioning/hashing
+   - Added SHA-256 hashing for raw, mask, label and effective detection inputs.
+   - Added recipe content hash, analysis-settings hash and result-integrity hash.
+   - Added immutable analysis run IDs, UTC timestamps and complete run history.
+   - Analysis result/storage schema advanced to version 3.
+   - Manual decision edits recalculate the persisted result hash.
+
+7. Hard-coded global failure threshold removed
+   - DelamAnalysisService now evaluates DelamDecisionThresholds from the active recipe.
+   - Whole-sample threshold is editable in Calibration Studio and saved on publish.
+   - An optional TSV-specific threshold is supported by the data model and decision engine.
+   - The legacy 5% value remains only as a migration/default value for old presets; it is no
+     longer hard-coded inside the analysis decision method.
+
+Additional export/review improvements
+-------------------------------------
+- Excel output now includes current results, complete analysis-run history and export metadata.
+- Exported fields include method, automatic/final decision, manual override, thresholds,
+  polygon vertex counts, recipe/version/hash, input hashes, settings hash, result hash,
+  timestamps, warnings and current input-integrity status.
+- Analysis review details now display recipe and result provenance.
+- Stored mask threshold or color settings are reused when reconstructing result previews.
+
+New source files
+----------------
+- Models/AnalysisRecipeModels.cs
+- Services/AnalysisIntegrityService.cs
+- Services/AnalysisRecipeResolver.cs
+
+Major modified source files
+---------------------------
+- MainForm.cs
+- Forms/DelamAnalysisOverlayPreviewForm.cs
+- Forms/DelamAnalysisReviewForm.cs
+- Forms/SamColorDelamQuantificationForm.cs
+- Forms/SampleDetectionReviewForm.cs
+- Forms/SampleDetectorTestForm.Calibration.cs
+- Forms/SampleDetectorTestForm.Designer.cs
+- Forms/SampleRoiReviewForm.cs
+- Models/ColorQuantificationModels.cs
+- Models/DelamAnalysisModels.cs
+- Models/SampleRoiCorrection.cs
+- Models/UnifiedSampleDetectionPreset.cs
+- Services/ColorDelamQuantifier.cs
+- Services/DelamAnalysisService.cs
+- Services/DelamAnalysisStore.cs
+- Services/ExcelService.cs
+- Services/ImageCombiner.cs
+- Services/RoiCorrectionStore.cs
+- Services/SamAdvancedTsvDetectionModels.cs
+- Services/SamAdvancedTsvDetectorAdapter.cs
+- Services/SamDetectionTypes.cs
+- Services/SamFinalRoiDetector.cs
+- Services/SampleRoiUtility.cs
+- Services/UnifiedSampleDetectionPresetStore.cs
+
+Migration and compatibility assumptions
+---------------------------------------
+- Existing presets without embedded advanced CV settings use the last explicitly published
+  advanced calibration as a compatibility fallback when the runtime snapshot is created.
+- Existing presets receive a recipe-owned 5.00% whole-sample threshold unless republished with
+  another value.
+- The optional TSV decision threshold is disabled unless explicitly configured in recipe data.
+- Existing rectangle-only ROI corrections are converted to polygon masks at runtime.
+- Existing result files remain loadable. Runs without hashes/settings are shown as legacy or
+  unverified rather than being assigned false provenance.
+- Rescanning preserves results even when source files change; hash comparison identifies stale
+  runs and prevents them from being exported as current.
+
+Validation performed
+--------------------
+- Static delimiter/lexical checks passed for all 27 modified C# files.
+- Priority 0 invariant checks passed for non-destructive scanning, recipe propagation,
+  recipe-based thresholds, authoritative export, explicit-only publishing, polygon usage,
+  history retention and SHA-256 integrity fields.
+- Direct production calls to the advanced detector are routed through SamFinalRoiDetector;
+  the only separate direct call is the in-memory Calibration Studio preview path.
+- Repository diff whitespace/error check passed.
+
+Validation limitation
+---------------------
+A full restore/build/runtime test was not possible in this execution environment because no
+.NET SDK, MSBuild or C# compiler is installed and external package/toolchain download is not
+available. The repository should therefore be built and smoke-tested on the target Windows
+machine with the .NET 8 SDK before production use.
+
+================================================================================
+CV CALIBRATION STUDIO STACK OVERFLOW + SAMPLE GUARD FIX
+Timeline stamp: 2026-07-27 13:41:43 CEST (Europe/Berlin)
+Version: rfgan_priority0_traceable_analysis_v1_calibration_stack_fix
+================================================================================
+
+Issue investigated
+------------------
+Opening CV Calibration Studio with a selected sample could terminate with:
+
+System.StackOverflowException (0x800703E9)
+
+The debugger could appear to stop near GetCombo<T>() while reading calibration controls,
+but GetCombo<T>() was not the root cause.
+
+Root cause
+----------
+SynchronizeActivePresetFromUi() called BuildAdvancedGeometryFromCalibrationUi().
+BuildAdvancedGeometryFromCalibrationUi() then called SynchronizeActivePresetFromUi()
+again. This produced an infinite synchronous recursion while the calibration preview was
+being prepared, eventually exhausting the process stack.
+
+Changes made
+------------
+1. Removed the recursive synchronization call from
+   BuildAdvancedGeometryFromCalibrationUi(). The method now builds a geometry snapshot
+   only and does not mutate/synchronize the active preset.
+
+2. Added a _calSynchronizingPreset re-entry guard around
+   SynchronizeActivePresetFromUi(). This protects the form from future accidental
+   synchronization cycles.
+
+3. Added controlled calibration-run exception handling:
+   - logs the failing image and run identifier;
+   - displays a readable CV Calibration Studio error message;
+   - restores the Run / Apply button in a finally block;
+   - ignores stale errors/results from superseded live-update runs.
+
+4. Added sample-selection and image-availability guards in MainForm:
+   - uses the actively selected row;
+   - falls back to one checked sample when exactly one is checked;
+   - displays "Please select a sample first" when no unambiguous sample exists;
+   - warns when the selected sample has no raw or detection image;
+   - catches ordinary form-opening errors and logs the sample/image context.
+
+5. Added equivalent defensive handling in SampleDetectionReviewForm:
+   - informs the user when no sample is selected;
+   - validates the raw/detection image before opening the studio;
+   - logs and reports ordinary initialization/opening failures.
+
+Modified files
+--------------
+- Forms/SampleDetectorTestForm.Calibration.cs
+- Forms/SampleDetectionReviewForm.cs
+- MainForm.cs
+- updates.txt
+
+Validation notes
+----------------
+- Verified that BuildAdvancedGeometryFromCalibrationUi() no longer invokes
+  SynchronizeActivePresetFromUi().
+- Verified that synchronization has an explicit re-entry guard and resets it in finally.
+- Verified that all calibration launch paths added in this update validate sample/image state.
+- A full .NET build could not be run in this container because the .NET SDK/MSBuild is not
+  installed. Build and smoke-test the solution on the target Windows machine with .NET 8.
+
+================================================================================
+WORKSPACE SAVE / AUTOSAVE + ROI DRAFT RECOVERY FEATURE
+Timeline stamp: 2026-07-27 14:21:00 CEST (Europe/Berlin)
+Version: rfgan_priority0_traceable_analysis_v1_workspace_autosave
+================================================================================
+
+Purpose
+-------
+Added a project-scoped workspace persistence system that can restore the user's current
+working context after closing, restarting or recovering from a failure. The implementation
+runs inside the application as a single background writer rather than as a second process.
+
+Workspace data saved
+--------------------
+- Project root and project name.
+- Sample, label, mask, detection, ZGT/raw-source and output folder references.
+- Current sample mapping and the source file locations associated with each sample.
+- Checked samples and the currently active sample.
+- Active workflow tab, filter, sample type and selected preset/workflow state.
+- References to the authoritative ROI-correction and delamination-analysis stores.
+- Unconfirmed sample/TSV ROI rectangle edits, including X, Y, width and height.
+- Source-image dimensions and SHA-256 identity for validating recovered ROI drafts.
+
+Architecture
+------------
+1. Added a versioned WorkspaceState model and dedicated path/state models.
+2. Added WorkspaceStateService as the one in-process workspace coordinator:
+   - one serialized writer protected by SemaphoreSlim;
+   - 1.2-second debounce after related UI changes;
+   - 60-second checkpoint only while the workspace is dirty;
+   - immutable cloned snapshots before background serialization;
+   - immediate checkpoints for important operations;
+   - final synchronous flush during application shutdown.
+3. Added WorkspaceStateStore for atomic JSON persistence:
+   - writes to workspace_state.json.tmp;
+   - retains workspace_state.json.bak;
+   - replaces the active file atomically where supported;
+   - falls back to the backup when the main file cannot be loaded.
+4. Added WorkspacePathResolver so file locations are saved relative to the project root
+   with absolute-path fallbacks. This allows a project to be moved or reopened on another
+   drive more reliably.
+5. Added a small recent-workspace pointer under LocalAppData so the application can offer
+   to restore the last workspace at startup.
+
+Workspace location
+------------------
+Default project workspace:
+  <ProjectRoot>\Outputs\_Workspace\workspace_state.json
+
+Associated recovery files:
+  workspace_state.json.bak
+  workspace_state.json.tmp
+
+Recent-workspace pointer:
+  %LocalAppData%\RFGAN.SampleMapper\recent_workspace.json
+
+User-interface changes
+----------------------
+- Added Save workspace.
+- Added Save workspace as.
+- Added Open workspace.
+- Added an autosave status indicator for saved, saving, unsaved and error states.
+- Added a startup prompt for restoring the most recent workspace.
+- Added project-root relinking when a restored project has moved.
+- Missing files are resolved from project-relative paths first and absolute fallbacks second.
+
+Autosave triggers
+-----------------
+Autosave is requested after meaningful state changes rather than on a continuous polling
+loop. Triggers include folder/project changes, sample checks, active-sample changes,
+workflow/preset changes, mapping updates, scan completion, review/calibration entry and ROI
+editing. Rapid changes are coalesced by the debounce timer to avoid excessive disk writes.
+
+ROI draft recovery
+------------------
+- Sample and TSV rectangle changes are captured as unconfirmed workspace drafts.
+- Dragging/resizing requests a debounced update, with an immediate checkpoint on mouse-up.
+- Drafts are validated against project, sample position, source dimensions and image hash.
+- A valid newer draft is restored with the visible state:
+    "ROI source: Recovered autosaved edit (not yet confirmed)"
+- Confirming a manual ROI continues to save through RoiCorrectionStore, which remains the
+  authoritative correction source.
+- After confirmation, the corresponding pending workspace draft is removed.
+- Existing confirmed ROI corrections and analysis results are not duplicated into the
+  workspace file, preventing conflicting sources of truth.
+
+Additional reliability changes
+------------------------------
+- Grid refresh now preserves checked samples and the active sample using stable project/
+  position keys rather than row indices.
+- Selecting a different project clears the previous in-memory mapping before the new
+  workspace is captured.
+- RoiCorrectionStore now uses temporary/backup files and can recover from its backup when
+  the main correction JSON is unreadable.
+- Autosave errors are logged and reported through the status indicator without terminating
+  the active image-analysis workflow.
+
+New files
+---------
+- Models/WorkspaceState.cs
+- Services/WorkspacePathResolver.cs
+- Services/WorkspaceStateStore.cs
+- Services/WorkspaceStateService.cs
+
+Modified files
+--------------
+- MainForm.cs
+- Forms/SampleRoiReviewForm.cs
+- Forms/SampleDetectionReviewForm.cs
+- Services/RoiCorrectionStore.cs
+- updates.txt
+
+Static validation
+-----------------
+- Passed 61/61 targeted workspace feature checks.
+- Verified explicit Save/Open/Save As controls and startup restore integration.
+- Verified versioned model, relative-path support, single-writer locking, debounce,
+  dirty-only periodic checkpointing and cloned background snapshots.
+- Verified atomic workspace save, backup recovery and final close flush.
+- Verified ROI draft creation, mouse-up checkpoint, source-image validation, recovery and
+  draft removal after confirmed correction.
+- Verified shared workspace service propagation into ROI review forms.
+- Verified delimiter/lexical balance for all modified and newly added C# files.
+- Verified no second executable or external state-saving process was introduced.
+
+Validation limitation
+---------------------
+A complete NuGet restore, compilation and runtime UI test could not be performed in this
+container because the .NET SDK/MSBuild is not installed. Build the solution with .NET 8 on
+the target Windows development machine and run the workspace recovery smoke tests before
+production deployment.
+
+Recommended smoke tests
+-----------------------
+1. Select a project, scan folders, check samples, save, restart and restore the workspace.
+2. Resize a sample/TSV ROI without confirming it, close/restart, reopen the sample and
+   verify that the draft is recovered and clearly marked as unconfirmed.
+3. Confirm the recovered ROI, restart again and verify that the confirmed correction is
+   used and the pending draft is no longer offered.
+4. Move the project folder, open the workspace and verify project-root relinking.
+5. Temporarily corrupt workspace_state.json and verify recovery from .bak.
+6. Verify that rapid ROI dragging produces coalesced saves and keeps the UI responsive.
+
+================================================================================
+2026-07-27 14:26:44 CEST - Workspace checkpoint Timer ambiguity build fix
+================================================================================
+Issue
+-----
+The workspace autosave build failed with CS0104 because `Timer` resolved ambiguously
+between `System.Windows.Forms.Timer` and `System.Threading.Timer`. The project uses
+WinForms implicit/global namespaces while WorkspaceStateService.cs also imports
+System.Threading, so the unqualified type name was not unique.
+
+Root cause
+----------
+WorkspaceStateService uses a 60-second background safety checkpoint with a callback and
+thread-pool execution. That behavior belongs to System.Threading.Timer; it is not a UI
+message-loop timer. Both the field declaration and constructor call used the unqualified
+name `Timer`.
+
+Changes
+-------
+- Changed the checkpoint field to `System.Threading.Timer`.
+- Changed the checkpoint constructor to `new System.Threading.Timer(...)`.
+- Kept existing System.Windows.Forms.Timer declarations in calibration and ZGT forms
+  explicitly qualified; those are UI timers and require no change.
+- Searched the complete C# source tree for unqualified Timer declarations/usages. No
+  additional ambiguous Timer references remain.
+
+Validation
+----------
+- Verified WorkspaceStateService now consistently uses System.Threading.Timer.
+- Verified UI timer users remain explicitly typed as System.Windows.Forms.Timer.
+- Verified no standalone `Timer` field declarations or constructor calls remain.
+
+Build limitation
+----------------
+The repository was source-validated in this container. A complete Windows WinForms build
+still needs to be run in Visual Studio/.NET 8 on the target development machine.
+
+
+================================================================================
+2026-07-27 17:11:15 CEST - Flexible File Mapping Core Version 1
+================================================================================
+Scope
+-----
+Implemented the UI-independent mapping foundation for the planned File Mapping Wizard.
+This version intentionally does not replace the active MainForm/ImageMapper workflow yet.
+The legacy mapping path remains unchanged until the wizard, persistence and integration
+stages are implemented and tested.
+
+Generalized sample identity
+---------------------------
+- Added SampleIdentityType values for X/Y positions, numeric sample IDs and manual IDs.
+- Added a stable internal SampleIdentity model that separates:
+  - CanonicalKey/InternalSampleId used internally by the application.
+  - DisplayName/SourceToken shown to the user from the source filename or path.
+- Extended SampleEntry with backward-compatible generalized identity fields while retaining
+  the existing Position field and legacy behavior.
+- X/Y identities use deterministic row-major ordering: X increases first while Y remains
+  constant, then Y increases.
+- Internal X/Y formula:
+    ((Y - 1) * ColumnCount) + X + StartIndex - 1
+- With ColumnCount=2 and three-digit padding:
+    X1Y1 -> internal 001
+    X2Y1 -> internal 002
+    X1Y2 -> internal 003
+- The generated internal number is not substituted into the visible sample label.
+- ColumnCount can be configured. A zero value means infer the largest discovered X value;
+  the effective value is exposed for later persistence in the confirmed profile/manifest.
+- Numeric sample IDs support first, last, Nth, longest and number-following-keyword token
+  extraction, plus direct-ID and sequential-natural-order assignment modes.
+- Leading-zero variants such as 1 and 01 normalize to the same numeric source identity,
+  while the source token remains available for display and audit evidence.
+
+Image discovery and filtering
+-----------------------------
+- Added iterative recursive image discovery for PNG, JPG, JPEG, BMP, TIF and TIFF files.
+- Added cancellation/progress support and safe handling of inaccessible files/folders.
+- Reparse points are not followed by default, preventing recursive directory-link loops.
+- Discovery returns image folders with direct and recursive image counts.
+- Added reusable filtering by filename, relative path or folder name using contains,
+  starts-with, ends-with and exact matching.
+- Filters can isolate role conflicts and files missing sample identities.
+
+Deterministic role assignment
+-----------------------------
+- Added RawImage, MaskImage, LabelImage, Ignored and Unassigned roles.
+- Added exact-folder, recursive-folder and keyword rules.
+- Implemented fixed precedence:
+    manual file assignment
+    > exact folder rule
+    > recursive folder rule
+    > keyword rule
+    > unassigned
+- Manual file assignments are never overwritten by automatic profile application.
+- Equal-priority rules that assign different roles are reported as blocking conflicts rather
+  than silently choosing one.
+- Every automatic/manual role decision retains rule ID, assignment method and evidence.
+
+Candidate-preserving mapping
+----------------------------
+- Added candidate mapping models that retain every raw, mask and label candidate.
+- Sole candidates are automatically marked primary.
+- Duplicate candidates are never overwritten.
+- Added explicit primary-candidate selection for later conflict-resolution UI.
+- Mapping validation reports:
+  - unassigned files;
+  - role-rule conflicts;
+  - assigned files without sample identity;
+  - duplicate internal identities;
+  - missing raw images;
+  - multiple raw/mask/label candidates;
+  - missing files and discovery issues.
+- Raw images are required by the core validator. Masks and labels remain optional at import
+  level so later workflows can apply their own requirements.
+
+Profile and manifest models
+---------------------------
+- Added versioned ImportMappingProfile and MappingManifest models.
+- The planned manifest retains all candidates, their primary status, relative and fallback
+  paths, assignment evidence, source identity evidence and deterministic sort order.
+- Manifest conversion to SampleEntry uses only explicitly selected primary candidates.
+- SHA-256 fields are included in the manifest model but hashing/persistent atomic stores are
+  reserved for the persistence/integration implementation stage.
+
+New files
+---------
+- Models/SampleIdentity.cs
+- Models/ImageMappingModels.cs
+- Models/MappingProfile.cs
+- Services/NaturalStringComparer.cs
+- Services/SampleIdentityComparer.cs
+- Services/ImageDiscoveryService.cs
+- Services/ImageFileFilterService.cs
+- Services/FileRoleAssignmentService.cs
+- Services/SampleIdentityExtractor.cs
+- Services/MappingValidationService.cs
+- Services/MappingBuilderService.cs
+
+Modified files
+--------------
+- Models/SampleEntry.cs
+- updates.txt
+
+Validation
+----------
+- Passed 73/73 targeted mapping-core source and behavior checks.
+- Verified X/Y parsing variants and the requested X-major/Y-step internal ordering.
+- Verified X1Y1=001, X2Y1=002 and X1Y2=003 with a two-column profile.
+- Verified numeric-token modes, natural ordering, manual identity support and visible source
+  token preservation.
+- Verified candidate retention, explicit primary selection and no silent duplicate overwrite.
+- Verified role-rule precedence, conflict reporting, supported extensions, safe directory
+  discovery and file filtering.
+- Verified delimiter/lexical balance for every new and modified C# file.
+- Verified MainForm.cs and the legacy Services/ImageMapper.cs remain byte-identical to the
+  previous repository version.
+- Verified no SQL/database dependency was introduced.
+
+Build limitation
+----------------
+The container does not include the .NET SDK/MSBuild, so a full Windows WinForms compile was
+not possible here. Version 1 is isolated from the current runtime path, but the solution
+must still be compiled in Visual Studio/.NET 8 before proceeding to Version 2.
+
+Next implementation stage
+-------------------------
+Version 2 will add FileMappingWizardForm with folder discovery, folder-role dropdowns,
+mixed-folder search/filtering, select-all-visible, bulk role assignment, identity-mode
+preview and conflict resolution, using these core services rather than embedding mapping
+logic inside form event handlers.
+
+================================================================================
+2026-07-27 17:27 CEST - FLEXIBLE FILE MAPPING VERSION 2: FOUR-PAGE WIZARD UI
+================================================================================
+
+Summary
+-------
+Added the standalone WinForms File Mapping Wizard on top of the Version 1 mapping core.
+Version 2 provides the complete discovery/classification/identity/conflict-resolution UI,
+but intentionally does not replace MainForm's legacy ImageMapper path yet. MainForm and
+persistent mapping-profile/manifest integration remain reserved for Version 3 so the current
+runtime workflow is not destabilized before persistence and restore behavior are complete.
+
+Wizard architecture
+-------------------
+- Added FileMappingWizardForm with four controlled stages:
+  1. Recursive folder discovery and folder-level role assignment.
+  2. Individual-file filtering and bulk role assignment.
+  3. X/Y, numeric Sample ID or manual identity assignment with live preview.
+  4. Candidate-preserving sample preview, validation and primary-file conflict resolution.
+- Added MappingWizardSession as a UI-independent coordinator. The form delegates all mapping
+  behavior to Version 1 services rather than embedding discovery/classification rules inside
+  WinForms event handlers.
+- The wizard exposes ConfirmedMapping, MappingProfile, DiscoveryResult and the effective X/Y
+  column count for Version 3 integration.
+
+Folder discovery page
+---------------------
+- Recursively scans PNG, JPG, JPEG, BMP, TIF and TIFF files through ImageDiscoveryService.
+- Displays only folders that contain supported images.
+- Shows direct and recursive image counts for each folder.
+- Provides a role dropdown per folder:
+  > Unassigned / mixed
+  > Raw image
+  > Mask image
+  > Label image
+  > Ignore
+- Provides an explicit Include subfolders checkbox per folder.
+- Exact-folder rules remain higher priority than recursive parent-folder rules.
+- Discovery warnings and inaccessible directories are retained for final validation rather
+  than terminating the entire scan.
+
+Individual-file classification page
+-----------------------------------
+- Added case-insensitive filtering by:
+  > relative path
+  > filename
+  > folder name
+- Added match modes:
+  > contains
+  > starts with
+  > ends with
+  > exact
+- Added optional role filtering.
+- Added Select all visible and Clear visible behavior.
+- Filtered-out selections remain selected internally; changing a filter does not silently
+  discard previous selections.
+- Added bulk assignment buttons for Raw image, Mask image, Label image, Ignore and Unassigned.
+- Manual file assignment overrides folder and keyword rules.
+- Optional Save current filter as project keyword rule creates a deterministic profile rule
+  and immediately applies it to other non-manually assigned matching files.
+- No image is renamed, moved or deleted.
+
+Identity assignment page
+------------------------
+- Added identity-method dropdown:
+  > X/Y position system
+  > Numeric Sample ID
+  > Manual assignment
+- Added search-source dropdown:
+  > full relative path
+  > filename only
+  > parent folder only
+- X/Y settings include configurable/inferred X-column count, start index and hidden internal
+  ID padding. X increases first while Y remains constant.
+- Numeric settings include first, last, Nth, longest and number-after-keyword token selection.
+- Numeric IDs can be used directly or reassigned sequentially by natural filename order.
+- The identity preview displays only source-facing tokens such as X1Y1 or 1002. Internal IDs
+  remain hidden from normal user-facing grids.
+- Manual identity mode accepts only the source-facing sample name. A stable MANUAL-### key is
+  generated internally and reused when the same displayed sample name is assigned again.
+- Switching to manual identity mode now clears stale automatic X/Y/numeric identities while
+  preserving intentional manual identities.
+
+Mapping validation and conflict-resolution page
+-----------------------------------------------
+- Displays samples using only the source-facing X/Y or numeric Sample ID.
+- Shows raw, mask and label candidate counts and Ready/Warning/Error status.
+- Retains every competing candidate instead of overwriting paths.
+- Candidate checkboxes behave as primary selectors: selecting one candidate makes it the sole
+  primary for that role while retaining alternatives for later manifest traceability.
+- Displays discovery warnings, unassigned files, missing identities, missing raw images,
+  duplicate internal identities, role-rule conflicts, missing paths and duplicate candidates.
+- Blocking errors disable confirmation. Resolved duplicate candidates remain warnings because
+  alternatives are intentionally preserved.
+- Raw images are required; masks and labels remain optional at import level.
+
+New files
+---------
+- Forms/FileMappingWizardForm.cs
+- Forms/FileMappingWizardForm.Designer.cs
+- Services/MappingWizardSession.cs
+
+Modified files
+--------------
+- Services/SampleIdentityExtractor.cs
+- updates.txt
+
+Compatibility and scope
+-----------------------
+- MainForm.cs remains unchanged.
+- Services/ImageMapper.cs remains unchanged.
+- Version 2 does not yet save mapping_profile.json or mapping_manifest.json.
+- Version 2 does not yet replace the application's active mapping workflow.
+- Version 3 will add atomic profile/manifest persistence, SHA-256 provenance, workspace restore,
+  MainForm launch/restore behavior and conversion of the confirmed manifest to SampleEntry.
+
+Validation
+----------
+- Verified all newly referenced WinForms controls are declared in the designer partial class.
+- Verified all new/modified C# files have balanced strings, comments and delimiters.
+- Verified the wizard contains all four planned stages and navigation/error boundaries.
+- Verified folder roles, file filters, visible-selection persistence, bulk role assignment,
+  keyword-rule creation, identity configuration and primary-candidate resolution are delegated
+  through the mapping-core services.
+- Verified no unqualified Timer references were introduced.
+- Verified no SQL/database dependency was introduced.
+- Verified MainForm.cs and Services/ImageMapper.cs remain byte-identical to Version 1.
+
+Build limitation
+----------------
+The container does not include the .NET SDK/MSBuild, so a complete Windows WinForms build and
+visual designer smoke test could not be performed here. Compile the solution in Visual Studio
+with .NET 8 before Version 3 integration.
+
+================================================================================
+2026-07-27 17:50:18 CEST - VERSION 2 MAIN FORM INTEGRATION FIX
+================================================================================
+
+Problem diagnosed
+------------------
+- The Version 2 File Mapping Wizard existed in the repository but was intentionally standalone.
+- MainForm never instantiated FileMappingWizardForm, so selecting a project still followed the
+  legacy source-selection and ImageMapper.ScanArchive path.
+- Even manually launching the standalone form would not have affected the active MainForm
+  mapping because its confirmed MappingBuildResult was not converted to SampleEntry records.
+
+Main Form integration
+---------------------
+- Selecting a project and choosing Existing Images now opens FileMappingWizardForm automatically.
+- Added an Edit File Mapping button beside Open ZGT Parser in the Image Source card.
+- Scan and map now requires a confirmed flexible mapping for existing-image projects and reopens
+  the wizard when no current-project mapping has been confirmed.
+- Cancelling the wizard leaves the existing application state intact; Scan and map stops cleanly
+  rather than silently falling back to hard-coded filename classification.
+- ZGT mode remains on the existing controlled ZGT workflow and does not force the image wizard.
+
+Confirmed mapping activation
+----------------------------
+- MainForm now owns a MappingBuilderService and retains the active ImportMappingProfile and
+  in-memory MappingManifest for the selected project.
+- A confirmed MappingBuildResult is converted to a MappingManifest and then to SampleEntry objects.
+- The Main Form mapping grid is refreshed immediately after confirmation.
+- Scan and map rebuilds its active mapping from the confirmed manifest instead of calling
+  ImageMapper.ScanArchive for existing-image projects.
+- Legacy automatic label/mask attachment is skipped when a flexible mapping is active, preventing
+  the confirmed role assignments from being overwritten by filename-keyword assumptions.
+- Optional detection-image attachment remains available for X/Y projects.
+
+Compatibility corrections
+-------------------------
+- X/Y identities preserve the exact source token as provenance but normalize the visible position
+  to the existing application format, for example X1 Y1. This remains compatible with ROI stores,
+  result matching and legacy X/Y attachment helpers.
+- MappingBuilderService now keys the legacy project dictionary by the user-visible position while
+  retaining the generalized stable identity in SampleEntry.SampleKey.
+- Added SampleEntryComparer. New mappings use deterministic SampleSortOrder; legacy entries fall
+  back to natural ordering of the displayed position.
+- MainForm mapping tables, sample cards, warnings, review lists and fallback-training lists now use
+  the generalized SampleEntryComparer where SampleEntry objects are being ordered.
+- SampleDetectionReviewForm now uses the same shared comparer and no longer contains a duplicate
+  X/Y-only comparer.
+- Opening a saved workspace clears any stale in-memory mapping profile/manifest from a previously
+  active project.
+
+New file
+--------
+- Services/SampleEntryComparer.cs
+
+Modified files
+--------------
+- MainForm.cs
+- Forms/FileMappingWizardForm.cs
+- Forms/SampleDetectionReviewForm.cs
+- Services/SampleIdentityExtractor.cs
+- Services/MappingBuilderService.cs
+- updates.txt
+
+Current persistence boundary
+----------------------------
+- The confirmed profile and manifest are active in memory and the mapped SampleEntry paths are
+  included in the existing workspace autosave.
+- Durable mapping_profile.json and mapping_manifest.json persistence, SHA-256 provenance and exact
+  restoration of manual per-file wizard assignments remain planned for Version 3.
+
+Validation
+----------
+- Verified the mapping wizard is instantiated from the Existing Images project-selection path.
+- Verified an Edit File Mapping button is present and wired in the Main Form Image Source card.
+- Verified Scan and map reopens the wizard if no current-project mapping is confirmed.
+- Verified confirmed mappings bypass ImageMapper.ScanArchive and legacy label/mask keyword linking.
+- Verified X/Y display keys remain compatible with existing X1 Y1 dictionary lookup behavior.
+- Verified numeric sample mappings retain their visible numeric ID and deterministic sort order.
+- Verified all modified C# files have balanced braces, parentheses and brackets.
+- Verified no new SQL/database dependency or unqualified Timer reference was introduced.
+
+Build limitation
+----------------
+The container does not include the .NET SDK/MSBuild, so a complete Windows WinForms compile and
+visual smoke test could not be performed. Build the solution in Visual Studio with .NET 8.
+
+================================================================================
+2026-07-27 17:05 CEST - File Mapping Wizard navigation/footer and Designer support fix
+================================================================================
+Reported issue
+--------------
+The File Mapping Wizard displayed the discovery page but its Back, Next/Confirm and
+Cancel controls were not visible, leaving no path to advance beyond Step 1.
+
+Root cause
+----------
+The form used three separately docked top-level controls (header, fill TabControl and
+bottom footer). Their z-order/docking interaction allowed the fill TabControl to cover
+the footer on some window sizes and DPI/display configurations. The form also lacked
+a parameterless design-time constructor and a matching .resx file, making Visual
+Studio WinForms Designer editing unreliable.
+
+Changes
+-------
+1. Added a designer-owned root TableLayoutPanel with fixed header/footer rows and a
+   flexible content row. This removes dock-order ambiguity and guarantees that the
+   navigation footer remains visible at every supported window size.
+2. Added a designer-owned footer TableLayoutPanel and FlowLayoutPanel so status text
+   and Back, Next/Confirm and Cancel buttons resize cleanly without hard-coded X
+   coordinates.
+3. Increased the footer to 70 px and gave navigation buttons explicit minimum sizes.
+4. Changed the navigation captions to '< Back', 'Next >' and 'Confirm mapping'.
+5. Added a public parameterless constructor used only by the WinForms Designer. The
+   existing runtime constructor still requires and uses the selected parent folder.
+6. Added DesignerCategory("Form"), FileMappingWizardForm.resx, and explicit project
+   nesting metadata for FileMappingWizardForm.cs/.Designer.cs/.resx.
+7. All control creation/layout remains in FileMappingWizardForm.Designer.cs; runtime
+   behavior and event wiring remain in FileMappingWizardForm.cs. The form can now be
+   opened with Visual Studio: right-click FileMappingWizardForm.cs -> View Designer.
+
+Files changed
+-------------
+- Forms/FileMappingWizardForm.cs
+- Forms/FileMappingWizardForm.Designer.cs
+- Forms/FileMappingWizardForm.resx (new)
+- GaN_DataVisualization.csproj
+- updates.txt
+
+Validation
+----------
+- Verified the root layout contains header, wizard content and footer in separate rows.
+- Verified Back, Next and Cancel are children of the visible footer navigation panel.
+- Verified AcceptButton and CancelButton still target the correct controls.
+- Verified the parameterless designer constructor does not start image discovery.
+- Verified runtime construction still initializes the mapping session and discovery.
+- Full compilation requires Visual Studio/.NET 8 on Windows; SDK/MSBuild is unavailable
+  in the packaging environment.
+
+================================================================================
+2026-11-04 17:09:59 CET (+0100) - Phase 4.3 Unified Engine archival snapshot
+================================================================================
+Version: Phase 4.3 - Unified Sample Detection Runtime Cutover
+Action: Timestamped distribution snapshot of the most recent RF GaN C# solution available in this conversation.
+Source archive: RFGAN_SamVoidQuantifier_Phase4_3_UnifiedEngine.zip
+Changes: Added this timestamped entry to the existing updates.txt file. All other project files were preserved byte-for-byte; no C# implementation, build files or assets were changed.
+Source provenance: The latest internal source-file timestamp in the supplied Phase 4.3 archive is 2026-08-24 23:25:18 (ZIP entry timestamp, time zone unspecified). The timestamp above is the packaging date, not a claim of new code development or compilation.
+Validation: Archive integrity and unchanged project files verified by SHA-256 comparisons. No build or runtime verification was performed.
+
+================================================================================
+2026-11-04 18:00:10 CET (+0100) - Reworked standalone WinForms v1.0.0
+================================================================================
+Version: RFGAN SAM Batch Quantifier v1.0.0 (new solution; not a replacement of Phase 4.3)
+Baseline: Original Phase 4.3 UnifiedEngine archive, preserved detector source unchanged.
+Added: RFGAN.Engine standalone batch importer/validator/ROI quantifier/exporter; RFGAN.Desktop clean WinForms UI with detector settings, ROI preview, manual ROI review; RFGAN.SmokeTests; DemoData; architecture documentation.
+Supported: PNG/TIF/etc image folders, ZGT C-scan conversion with separated acquisition-validity mask, XnYn matching, mask assignment, per-sample statuses, sequential batch/cancel, valid-pixel delam percentage, optional TSV percentage, CSV/JSON export with input hashes.
+Safety: Missing masks and zero ROI fail; unconfirmed IDs, low confidence, low coverage, nonbinary masks flag review; stale approved ROI/changed export inputs detected; experimental threshold labeled exploratory.
+Compatibility: Added lightweight LoggerHelper shim; original detector implementation not edited.
+Validation: Static file/source checks only. No Windows .NET 8 SDK/MSBuild in environment, so not compiled/executed here. Smoke tests must be run on Windows before use.
+Research status: Demonstration prototype, not calibrated/validated for physical failure-analysis dispositions.
+
+================================================================================
+2026-11-04 18:11:12 CET (+0100) - Reworked WinForms v1.0.1 compiler hotfix
+================================================================================
+Version: RFGAN SAM Batch Quantifier v1.0.1
+Based on: v1.0.0 source snapshot (2026-11-04 18:01:31 CET)
+
+Reported build failure
+----------------------
+CS0104: 'Size' is an ambiguous reference between 'System.Drawing.Size' and 'OpenCvSharp.Size'.
+MSBuild then reported RFGAN.Engine.dll missing because the engine project did not compile.
+
+Fix
+---
+- Added a local alias `using Size = OpenCvSharp.Size;` to
+  RFGAN.Engine/Batch/RoiQuantifier.cs, where 4 method declarations use the
+  unqualified `Size` type.
+- All OpenCV ROI and image dimension calculations now explicitly bind to
+  OpenCvSharp.Size. No image processing calculations were changed.
+- Original Phase 4.3 detector algorithm and models remain byte-identical.
+- Updated README with the hotfix description and Windows clean-build guidance.
+
+Validation
+----------
+- Source consistency verified: all four ambiguous Size type references are
+  resolved by the explicit alias; no other unqualified Size type was found in
+  RFGAN.Engine source.
+- ZIP integrity and all unrelated file byte hashes verified.
+- Full Visual Studio/.NET build and runtime tests require a Windows .NET SDK
+  and could not be run in this environment.
