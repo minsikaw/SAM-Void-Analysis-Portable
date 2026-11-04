@@ -1,6 +1,6 @@
 # RF GaN SAM Batch Quantifier — Reworked v1.0.1 (WinForms)
 
-A deliberately small Windows desktop prototype for batch quantification of delamination masks inside SAM sample ROIs. The **original Phase 4.3 sample-detection algorithm and engine are copied unchanged**, while ingestion, analysis, ROI review, and export live in a separate workflow. This is an engineering/research prototype, **not validated for semiconductor release decisions**.
+A deliberately small Windows desktop prototype for batch quantification of delamination masks inside SAM sample ROIs. The **original Phase 4.3 sample-detection algorithm and engine are unchanged**, while ingestion, analysis, ROI review, and export live in a separate workflow. This is an research prototype, **not validated for semiconductor release decisions**.
 
 ## v1.0.1 compiler hotfix
 
